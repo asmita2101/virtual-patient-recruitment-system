@@ -1,0 +1,33 @@
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Git
+.git/
+.gitignore
+
+# Secrets - never bake these into the image
+.env
+.env.*
+.streamlit/secrets.toml
+
+# IDE / OS junk
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Docs (not needed inside the running container)
+README.md
+
+# Test / build artifacts
+*.log
+.pytest_cache/
+.mypy_cache/

@@ -1,0 +1,19 @@
+# Streamlit configuration used both locally and inside Docker.
+# No secrets belong in this file - see .streamlit/secrets.toml (git-ignored)
+# or the GEMINI_API_KEY environment variable for that.
+
+[server]
+headless = true
+address = "0.0.0.0"
+port = 8501
+enableCORS = false
+enableXsrfProtection = true
+
+[browser]
+gatherUsageStats = false
+
+[theme]
+primaryColor = "#2563eb"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f8fafc"
+textColor = "#0f172a"

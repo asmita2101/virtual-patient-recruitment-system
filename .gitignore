@@ -1,0 +1,26 @@
+# Secrets - NEVER commit these
+.env
+.env.*
+.streamlit/secrets.toml
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# OS / IDE junk
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Logs / caches
+*.log
+.pytest_cache/
+.mypy_cache/
