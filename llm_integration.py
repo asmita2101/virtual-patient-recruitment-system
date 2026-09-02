@@ -32,6 +32,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 # Load variables from a local .env file if python-dotenv is installed and
@@ -50,6 +51,15 @@ except ImportError:
 # their API — update this string again in the future if Google deprecates
 # this model too.)
 GEMINI_MODEL_NAME = "gemini-3.6-flash"
+
+# Tried in order if the primary model returns a transient "overloaded" error
+# (HTTP 503 / UNAVAILABLE). Having a fallback avoids a demo/evaluation being
+# blocked by a temporary capacity spike on Google's most popular model.
+GEMINI_FALLBACK_MODELS = ["gemini-3.5-flash-lite", "gemini-2.5-flash"]
+
+# Retry behaviour for transient overload errors (503 / UNAVAILABLE).
+MAX_RETRIES_PER_MODEL = 3
+RETRY_BACKOFF_SECONDS = [2, 5, 10]  # wait time before each retry attempt
 
 
 def get_api_key() -> Optional[str]:
@@ -147,6 +157,43 @@ def _extract_json(text: str) -> str:
     return text
 
 
+def _is_overloaded_error(exc: Exception) -> bool:
+    """Detect Google's transient 'model overloaded' error so we know it is
+    worth retrying/falling back, as opposed to a permanent error (bad key,
+    invalid request, etc.) that would just fail the same way again."""
+    text = str(exc).lower()
+    return "503" in text or "unavailable" in text or "overloaded" in text or "high demand" in text
+
+
+def _call_gemini_with_retries(client, prompt: str) -> Tuple[bool, Optional[str], str]:
+    """
+    Try GEMINI_MODEL_NAME first, retrying on transient overload errors with
+    a short backoff. If it keeps failing, fall back to each model in
+    GEMINI_FALLBACK_MODELS in turn. Returns (success, raw_text_or_None, message).
+    """
+    models_to_try = [GEMINI_MODEL_NAME] + GEMINI_FALLBACK_MODELS
+    last_error_message = "Unknown error."
+
+    for model_index, model_name in enumerate(models_to_try):
+        for attempt in range(MAX_RETRIES_PER_MODEL):
+            try:
+                response = client.models.generate_content(model=model_name, contents=prompt)
+                raw_text = getattr(response, "text", None)
+                if raw_text:
+                    note = f" (using fallback model '{model_name}')" if model_index > 0 else ""
+                    return True, raw_text, f"Success{note}."
+                last_error_message = f"Model '{model_name}' returned an empty response."
+                break  # empty response isn't an overload issue - move to next model, don't retry
+            except Exception as exc:  # noqa: BLE001
+                last_error_message = str(exc)
+                if _is_overloaded_error(exc) and attempt < MAX_RETRIES_PER_MODEL - 1:
+                    time.sleep(RETRY_BACKOFF_SECONDS[attempt])
+                    continue
+                break  # not an overload error, or out of retries for this model - try next model
+
+    return False, None, last_error_message
+
+
 def generate_eligibility_rules(
     natural_language_criteria: str, dataset_features: Dict[str, Any]
 ) -> Tuple[bool, Optional[Dict[str, Any]], str]:
@@ -178,12 +225,19 @@ def generate_eligibility_rules(
     try:
         client = genai.Client(api_key=api_key)
         prompt = _build_prompt(natural_language_criteria, dataset_features)
-        response = client.models.generate_content(model=GEMINI_MODEL_NAME, contents=prompt)
-        raw_text = getattr(response, "text", None)
-        if not raw_text:
-            return False, None, "Gemini returned an empty response. Please try again or rephrase your criteria."
-    except Exception as exc:  # noqa: BLE001 - surface any API failure to the UI
-        return False, None, f"Gemini API request failed: {exc}"
+    except Exception as exc:  # noqa: BLE001
+        return False, None, f"Could not initialize the Gemini client: {exc}"
+
+    success, raw_text, call_message = _call_gemini_with_retries(client, prompt)
+    if not success:
+        if _is_overloaded_error(Exception(call_message)):
+            return False, None, (
+                "Gemini's servers are currently overloaded (high demand on this model). "
+                "We automatically retried and tried a fallback model, but it is still "
+                "unavailable. Please wait a minute and click 'Generate Eligibility Rules' "
+                "again, or edit the rules JSON manually on this page in the meantime."
+            )
+        return False, None, f"Gemini API request failed: {call_message}"
 
     json_text = _extract_json(raw_text)
     try:
